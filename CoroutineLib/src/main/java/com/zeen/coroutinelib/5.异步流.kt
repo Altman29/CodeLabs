@@ -564,5 +564,105 @@ fun main592() = runBlocking<Unit> {
 /**
  * 10.1 zip
  * 于kotlin标准库中的Sequence.zip扩展函数一样，流有一个zip运算符，用于合并俩个流的相应值。
+ * 与kotlin标准库中的Sequence.Zip扩展函数一样，流一个zip运算符，用于组合俩个流的相应值：
+ */
+fun main5101() = runBlocking {
+    val nums = (1..3).asFlow() //numbers 1..3
+    val strs = flowOf("one", "two", "three") //strings
+    nums.zip(strs) { a, b -> "$a -> $b" }// compose a single string
+        .collect { println(it) }  //collect and print
+
+    /**
+     * >>
+     * 1 -> one
+     * 2 -> two
+     * 3 -> three
+     */
+}
+
+/**
+ * 10.2 Combine
+ * 当flow表示变量或操作的最新值时，可能需要执行依赖于相应流的最新值的计算，并在任何上游发出值时重新计算它。
+ * 相应的运算符族称为combine。
+ *
+ * 例如，如果上例中的数字每300毫秒更新一次，但字符串每400毫秒更新一次，则使用zip运算符压缩它们仍会产生相同的结果，
+ * 尽管结果是每400毫秒打印一次。
+ *
+ * 在本例中，使用中间运算符onEach来延迟每个元素，并使发出样本流的代码更具声明性，更加简单。
+ */
+fun main5102() = runBlocking {
+    val nums = (1..3).asFlow().onEach { delay(300) }
+    val strs = flowOf("one", "two", "three").onEach { delay(400) }
+    val startTime = System.currentTimeMillis()
+    nums.combine(strs) { A, B -> "$A -> $B" }
+        .collect { value -> println("$value at ${System.currentTimeMillis() - startTime} ms from start") }
+
+    /**
+     * zip:>>
+     * 1 -> one at 427 ms from start
+     * 2 -> two at 827 ms from start
+     * 3 -> three at 1234 ms from start
+     *
+     * combine:>>
+     * 1 -> one at 447 ms from start
+     * 2 -> one at 649 ms from start
+     * 2 -> two at 852 ms from start
+     * 3 -> two at 960 ms from start
+     * 3 -> three at 1267 ms from start
+     */
+}
+
+/**
+ * 11. 展平流(Flattening flows)
+ * 流表示异步接收到的值序列，因此在每个值触发对另一个值序列的请求的情况下，很容易获取新值。
+ * 例如，我们可以使用以下函数，该函数返回相隔500毫秒的俩个字符串流
+ *
+ * 流表示异步接收的值序列，因此在每个值触发对另一个值序列的请求的情况下很容易获取新值。例如，我们可以使用以下函数，该函数返回相隔500毫秒的两个字符串流：
+ *
+ * fun requestFlow(i: Int): Flow<String> = flow {
+ * emit("$i: First")
+ * delay(500) // wait 500 ms
+ * emit("$i: Second")
+ * }
+
+ * 现在，如果我们有一个包含三个整数的流，并为每个整数调用 requestFlow，如下所示：
+ * (1..3).asFlow().map { requestFlow(it) }
+ * 然后我们最终得到一个流（flow< flow< String >>），需要将其展平为单独一个流以进行进一步处理。
+ * 集合和序列对此提供了 flatten 和 flatMap 运算符。然而，由于流的异步特性，它们需要不同的展开模式，因此流上有一系列 flattening 运算符。
+ */
+
+/**
+ * 11.1 flatMapConcat
+ * flatMapConcat和flattencat运算符实现了Concatenating模式，它们是与序列运算符最直接的类比。它们等待内部流完成，然后开始收集下一个流，如下：
  *
  */
+fun requestFlow(i: Int): Flow<String> = flow {
+    emit("$i: First")
+    delay(500)//wait 500 ms
+    emit("$i: Second")
+}
+
+fun main5111() = runBlocking {
+    val startTime = System.currentTimeMillis() // remember the start time
+    (1..3).asFlow().onEach { delay(100) }// a number every 100 ms
+        .flatMapConcat { requestFlow(it) }
+        .collect { value -> println("$value at ${System.currentTimeMillis() - startTime} ms from start") }
+
+    /**
+     * flatMapConcat 的顺序特性在输出结果中清晰可见：
+     * >>
+     * 1: First at 132 ms from start
+     * 1: Second at 633 ms from start
+     * 2: First at 744 ms from start
+     * 2: Second at 1255 ms from start
+     * 3: First at 1365 ms from start
+     * 3: Second at 1869 ms from start
+     */
+}
+
+/**
+ * 11.2 flatMapMerge
+ * 另一种flattening模式是同时收集所有传入流并将其值合并到单个流中，以便尽快发出值。它由flatMapMerge和flattenMerge运算符实现。
+ * 它们
+ */
+
