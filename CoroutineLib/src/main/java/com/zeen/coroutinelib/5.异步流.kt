@@ -663,6 +663,130 @@ fun main5111() = runBlocking {
 /**
  * 11.2 flatMapMerge
  * 另一种flattening模式是同时收集所有传入流并将其值合并到单个流中，以便尽快发出值。它由flatMapMerge和flattenMerge运算符实现。
- * 它们
+ * 它们都接受一个可选的并发参数，该参数用于限制同时收集的并发流的数量。(默认情况下，等于DEFAULT_CONCURRENCY)
  */
 
+
+fun main5112() = runBlocking {
+    val startTime = System.currentTimeMillis()// remember the start time
+    (1..3).asFlow().onEach { delay(100) }// a number every 100 ms
+        .flatMapMerge { requestFlow(it) }
+        .collect { value -> println("$value at ${System.currentTimeMillis() - startTime} ms from start") }
+
+    /**
+     * flatMapMerge 的并发性是显而易见的：
+     * >>
+     * 1: First at 161 ms from start
+     * 2: First at 271 ms from start
+     * 3: First at 380 ms from start
+     * 1: Second at 674 ms from start
+     * 2: Second at 785 ms from start
+     * 3: Second at 898 ms from start
+     *
+     * 请注意，flatMapMerge 按顺序调用其代码块（{requestFlow(it)}），但同时收集结果流，这相当于先执行序列 map{requestFlow(it)}，
+     * 然后对返回值调用 flattenMerge.
+     */
+}
+
+/**
+ * 11.3 flatMapLatest
+ * 与“Processing the latest value（处理最新值）”章节介绍的 collectLatest 操作符类似，存在相应的 "Latest" flattening 模式。在该模式下，
+ * 一旦发出新流，将取消先前已发出的流。这通过 flatMapLatest 运算符实现。
+ */
+fun main5113() = runBlocking<Unit> {
+    val startTime = System.currentTimeMillis() // remember the start time
+    (1..3).asFlow().onEach { delay(100) } // a number every 100 ms
+        .flatMapLatest { requestFlow(it) }
+        .collect { value -> // collect and print
+            println("$value at ${System.currentTimeMillis() - startTime} ms from start")
+        }
+
+    /**
+     * 本例中的输出很好的演示了 flatMapLatest 的工作原理
+     * >>
+     * 1: First at 142 ms from start
+     * 2: First at 322 ms from start
+     * 3: First at 425 ms from start
+     * 3: Second at 931 ms from start
+     *
+     * 请注意，当新值到来时，flatMapLatest 将取消其块中的所有代码（{requestFlow(it)}）。requestFlow 函数本身的调用是很快速的，
+     * 并非挂起函数，如果其内部不包含额外的挂起点，那么它就不能被取消，所以此处就在其内部使用了 delay 函数，使其可以达到被取消的目的。
+     */
+}
+
+/**
+ * 12. 流异常(FLow exceptions)
+ * 当发射器或运算符内部的代码引发异常时，流收集器可以结束运行，但会出现异常。有集中方法可以处理这些异常。
+ */
+
+/**
+ * 12.1 收集器try与catch(Collector try and catch)
+ * 收集器可以使用kotlin的try/catch来处理异常
+ */
+fun foo5121(): Flow<Int> = flow {
+    for (i in 1..3) {
+        println("Emitting $i")
+        emit(i)
+    }
+}
+
+fun main5121() = runBlocking<Unit> {
+    try {
+        foo5121().collect { value ->
+            println(value)
+            check(value <= 1) {
+                "Collected $value"
+            }
+        }
+    } catch (e: Throwable) {
+        println("Caught $e")
+    }
+    /**
+     * >>
+     * 此代码成功捕获 collect 运算符中的异常，如我们所见，在此之后不再发出任何值：
+     *
+     * >>
+     * Emitting 1
+     * 1
+     * Emitting 2
+     * 2
+     * Caught java.lang.IllegalStateException: Collected 2
+     */
+}
+
+/**
+ * 12.2 一切都已捕获 (Everything is caught)
+ * 表面的示例实际上捕获了发射器或任何中间或终端运算符中发生的任何异常。例如，让我们更改代码，以便将发出的值映射到字符串，但相应的代码会产生异常。
+ */
+fun foo5122(): Flow<String> =
+    flow {
+        for (i in 1..3) {
+            println("Emitting $i")
+            emit(i)
+        }
+    }.map { value ->
+        check(value <= 1) { "Crashed on $value" }
+        "string $value"
+    }
+
+fun main5122() =
+    runBlocking<Unit> {
+        try {
+            foo5122().collect { value -> println(value) }
+        } catch (e: Throwable) {
+            println("Caught $e")
+        }
+        /**
+         * 仍捕获此异常，并停止收集
+         * >>
+         * Emitting 1
+         * string 1
+         * Emitting 2
+         * Caught java.lang.IllegalStateException: Crashed on 2
+         */
+    }
+
+/**
+ * 13. 异常透明性(Exception transparency)
+ * flows对于异常必须是透明的。
+ */
