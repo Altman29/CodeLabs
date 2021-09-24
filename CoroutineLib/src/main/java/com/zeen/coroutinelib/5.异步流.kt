@@ -788,5 +788,241 @@ fun main5122() =
 
 /**
  * 13. 异常透明性(Exception transparency)
- * flows对于异常必须是透明的。
+ * 但是发射器的代码如何封装其异常处理行为呢？
+ * lows 对于异常必须是透明的，并且在 flow{...} 构建器中发射值有可能抛出异常时，异常必须显式地从 try/catch 块内部抛出。这保证了抛出异常的收集器始终可以使用 try/catch 来捕获异常，如前一个示例所示
+ * 发射器可以使用 catch 运算符来保持此异常的透明性，并允许封装其异常处理行为。catch 运算符可以分析异常并根据捕获到的异常以不同的方式对其作出反应：
+ * - 可以使用 throw 重新引发异常
+ * - 使用 catch 的 emit 可以将异常转换为值的 emission
+ * - 异常可以被其他代码忽略、记录或处理
+ * 例如，让我们在捕获异常时发出一段文本：
  */
+fun foo5103(): Flow<String> =
+    flow {
+        for (i in 1..3) {
+            println("Emitting $i")
+            emit(i)
+        }
+    }.map { value ->
+        check(value <= 1) { "Crashed on $value" }
+        "string $value"
+    }
+
+fun main5103() = runBlocking<Unit> {
+    foo5103()
+        .catch { e -> emit("Caught $e") }//emit on exception
+        .collect { value -> println(value) }
+
+    /**
+     * >>
+     * Emitting 1
+     * string 1
+     * Emitting 2
+     * Caught java.lang.IllegalStateException: Crashed on 2
+     */
+}
+
+/**
+ * 13.1 透明捕获(Transparent catch)
+ * catch中间运算符遵循异常透明性，只捕获上游异常（即catch上所有运算符的异常，而不是catch下所有运算符的异常）。如果collect{...}
+ * 放在catch下面抛出异常，程序将退出。
+ */
+fun foo5131(): Flow<Int> = flow {
+    for (i in 1..3) {
+        println("Emitting $i")
+        emit(i)
+    }
+}
+
+fun main5131() = runBlocking<Unit> {
+    foo5131()
+        .catch { e -> println("Caught $e") } // does not catch downstream exceptions
+        .collect { value ->
+            check(value <= 1) { "Collected $value" }
+            println(value)
+        }
+    /**
+     * >>
+     * 尽管存在 catch 运算符，但不会打印 “Caught ...” 日志 并抛出异常。
+     */
+}
+
+/**
+ * 13.2 声明式捕获(Catching declaratively)
+ * 可以将catch运算符的声明性与处理所有异常的愿望结合起来，方法是将collect运算符原先所要做的操作移动到onEach中，并将其放在catch运算符之前。
+ * 此流的取值操作必须由不带参数的collect函数来调用触发。
+ */
+fun foo5132(): Flow<Int> = flow {
+    for (i in 1..3) {
+        println("Emitting $i")
+        emit(i)
+    }
+}
+
+fun main5132() = runBlocking<Unit> {
+    foo5132()
+        .onEach { value ->
+            check(value <= 1) { "Collected $value" }
+            println(value)
+        }
+        .catch { e -> println("Caught $e") }
+        .collect()
+    /**
+     * >>
+     * Emitting 1
+     * 1
+     * Emitting 2
+     * Caught java.lang.IllegalStateException: Collected 2
+     *
+     * 现在我们可以看到打印了一条 “Caught ...” 消息，至此我们捕获了所有异常，而无需显式使用 try/catch
+     */
+}
+
+/**
+ * 14. 流完成(Flow completion)
+ * 当流收集完成时（正常或异常），它可能需要执行一个操作。正如可能注意到的，它可以通过俩种方式完成：命令式或声明式。
+ *
+ * 14.1 命令式finally块(imperative finally block)
+ * 除了try/catch外，收集器还可以使用finally在收集完成时执行操作。
+ */
+fun foo5141(): Flow<Int> = (1..3).asFlow()
+
+fun main5141() = runBlocking<Unit> {
+    try {
+        foo5141().collect { value -> println(value) }
+    } finally {
+        println("Done")
+    }
+    /**
+     * >>
+     * 1
+     * 2
+     * 3
+     * Done
+     */
+}
+
+/**
+ * 14.2 声明式处理(Declarative handling)
+ * 对于声明性方法，flow有一个onCompletion中间运算符，该运算符在流完全收集后调用，前面示例可以使用onCompletion运算符重写，并生成相同的输出：
+ */
+fun foo5142(): Flow<Int> = (1..3).asFlow()
+
+fun main5142() = runBlocking<Unit> {
+    foo5142()
+        .onCompletion { println("Done") }
+        .collect { value -> println(value) }
+    /**
+     * >>
+     * 1
+     * 2
+     * 3
+     * Done
+     *
+     * onCompletion 的主要优点是包含一个 lambda 参数，该 lambda 包含一个可空的 Throwable 参数，该 Throwable 参数
+     * 可用于确定流收集是正常完成还是异常完成。在以下示例中，foo() 流在发出数字1后引发异常:
+     */
+}
+
+fun foo51422(): Flow<Int> = flow {
+    emit(1)
+    throw RuntimeException()
+}
+
+fun main51422() = runBlocking<Unit> {
+    foo51422()
+        .onCompletion { cause -> if (cause != null) println("Flow completed exceptionally") }
+        .catch { println("Caught exception") }
+        .collect { value -> println(value) }
+    /**
+     * >>
+     * 1
+     * Flow completed exceptionally
+     * Caught exception
+     *
+     * 与catch 运算符不同，onCompletion 运算符不处理异常。正如我们从上面的示例代码中看到的，异常仍然会流向下游。
+     * 它将被传递给其他完成 onCompletion 运算符，并可以使用 catch 运算符进行处理。
+     */
+}
+
+/**
+ * ？？？不准确
+ * 14.3 仅限上游异常(Upstream exceptions only)
+ * 就像catch操作符一样，onCompletion只看到来自上游的异常，而看不到下游的异常。例如，运行以下代码：
+ */
+fun foo5143(): Flow<Int> = (1..3).asFlow()
+
+fun main5143() = runBlocking<Unit> {
+    foo5143()
+        .onCompletion { cause -> println("Flow completed with $cause") }
+        .collect { value ->
+            check(value <= 1) { "Collected $value" }
+            println(value)
+        }
+
+    /**
+     * 可以看到completion cause为空，但流收集失败并抛出异常。
+     * >>
+     * 1
+     * Flow completed with null
+     * Exception in thread "main" java.lang.IllegalStateException: Collected 2
+     */
+}
+
+/**
+ * 15. 命令式还是声明式(Imperative versus declarative)
+ * 现在我们知道如何收集流，并以命令式和声明式的方式处理它的完成和异常。这里很自然的就有了个问题，应该首选哪种方法呢？为什么？
+ * 作为一个库，我们不提倡任何特定的方法，并且相信这两种方式都是有效的，应该根据你自己的偏好和代码风格来选择。
+ */
+
+/**
+ * 16. 启动流 (Launching flow)
+ * 很容易使用流来表示来自某个数据源的异步事件。在这种情况下，我们需要一个模拟的 addEventListener 函数，该函数
+ * 将一段代码注册为对传入事件的响应，并继续进一步工作。onEach 运算符可以担任此角色。然而，onEach 是一个中间运算符。
+ * 我们还需要一个终端运算符来收集数据。否则，只注册 onEach 是没有效果的。
+ *
+ * 如果在 onEach 之后使用 collect 终端运算符，则在 collect 之后的代码将等待流被收集完成后再运行：
+ */
+
+fun events516(): Flow<Int> = (1..3).asFlow().onEach { delay(100) }
+
+fun main516() = runBlocking<Unit> {
+    events516()
+        .onEach { event -> println("Event: $event") }
+        .collect() // <--- Collecting the flow waits
+    println("Done")
+
+    /**
+     * >>
+     * Event: 1
+     * Event: 2
+     * Event: 3
+     * Done
+     *
+     * launchIn终端运算符在这里是很使用的。通过将collect替换为launchIn，可以在单独的协程中启动收集流数据的操作，以便立即继续执行下一步：
+     */
+}
+
+fun main() = runBlocking<Unit> {
+    events516()
+        .onEach { event -> println("Event: $event") }
+        .launchIn(this) // <--- Launching the flow in a separate coroutine
+    println("Done")
+
+    /**
+     * 运行结果如下
+     * >>
+     * Done
+     * Event: 1
+     * Event: 2
+     * Event: 3
+     *
+     * launchIn 所需的参数用于指定启动用于收集流的协程的作用域。在上面的示例中，此作用域来自 runBlocking，因此当流运行时，
+     * runBlocking 作用域等待其子协程完成，并阻止主函数返回和终止此示例代码.
+     *
+     * 在实际应用程序中，作用域将来自生命周期是有限的实体。一旦此实体的生命周期终止，相应的作用域将被取消，
+     * 从而取消相应流的收集。onEach { ... }.launchIn(scope) 的工作方式与 addEventListener 类似。但是，
+     * 不需要相应的 removeEventListener 函数，因为 cancellation 和结构化并发可以达到这个目的.
+     *
+     * 请注意，launchIn 还返回一个 Job 对象，该 Job 仅可用于取消相应的流数据收集协程，而不取消整个作用域或加入它
+     */
+}
